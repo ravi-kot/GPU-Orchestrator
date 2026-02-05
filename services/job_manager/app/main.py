@@ -68,6 +68,36 @@ class WorkReportReq(BaseModel):
     error: Optional[str] = None
 
 
+def job_public_view(j: Job) -> Dict[str, Any]:
+    return {
+        "job_id": j.job_id,
+        "job_type": j.job_type,
+        "payload": j.payload,
+        "state": j.state,
+        "attempts": j.attempts,
+        "max_retries": j.max_retries,
+        "created_at": j.created_at,
+        "assigned_at": j.assigned_at,
+        "finished_at": j.finished_at,
+        "next_retry_at": j.next_retry_at,
+        "last_worker": j.last_worker,
+        "last_error": j.last_error,
+    }
+
+
+def worker_public_view(w: Worker) -> Dict[str, Any]:
+    return {
+        "worker_id": w.worker_id,
+        "name": w.name,
+        "capabilities": w.capabilities,
+        "last_seen": w.last_seen,
+        "busy": w.busy,
+        "quarantined_until": w.quarantined_until,
+        "quarantined": worker_quarantined(w),
+        "alive": worker_alive(w),
+    }
+
+
 # -----------------------
 # Background tasks
 # -----------------------
@@ -157,25 +187,54 @@ def get_job(job_id: str):
     j = JOBS.get(job_id)
     if not j:
         return Response(status_code=404)
-    return {
-        "job_id": j.job_id,
-        "job_type": j.job_type,
-        "state": j.state,
-        "attempts": j.attempts,
-        "max_retries": j.max_retries,
-        "created_at": j.created_at,
-        "assigned_at": j.assigned_at,
-        "finished_at": j.finished_at,
-        "next_retry_at": j.next_retry_at,
-        "last_worker": j.last_worker,
-        "last_error": j.last_error,
-    }
+    return job_public_view(j)
+
+
+@app.get("/jobs")
+def list_jobs(state: Optional[str] = None, limit: int = 200):
+    items = list(JOBS.values())
+    if state:
+        items = [j for j in items if j.state == state]
+    # newest first
+    items.sort(key=lambda j: j.created_at, reverse=True)
+    items = items[: max(1, min(limit, 2000))]
+    return [job_public_view(j) for j in items]
+
+
+@app.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    j = JOBS.get(job_id)
+    if not j:
+        return Response(status_code=404)
+    if j.state in ("succeeded", "dead"):
+        return {"ok": True, "state": j.state}
+    # Mark terminal; queue may still contain job_id, but pull_work will skip it.
+    j.state = "dead"
+    j.finished_at = now()
+    log.warning("job cancelled", extra={"event": "job_cancelled", "job_id": job_id, "state": j.state})
+    event_log.emit("job_cancelled", {"job_id": job_id, "state": j.state})
+    return {"ok": True, "state": j.state}
+
+
+@app.delete("/jobs/{job_id}")
+def delete_job(job_id: str, force: int = 0):
+    j = JOBS.get(job_id)
+    if not j:
+        return Response(status_code=404)
+    if j.state == "running" and not force:
+        return Response(status_code=409, content="job is running; use ?force=1 to delete")
+    del JOBS[job_id]
+    log.warning("job deleted", extra={"event": "job_deleted", "job_id": job_id})
+    event_log.emit("job_deleted", {"job_id": job_id})
+    return {"ok": True}
 
 
 @app.post("/workers/register")
 def register_worker(req: WorkerRegisterReq):
     worker_id = str(uuid.uuid4())
     WORKERS[worker_id] = Worker(worker_id=worker_id, name=req.name, capabilities=req.capabilities)
+    log.info("worker registered", extra={"event": "worker_registered", "worker_id": worker_id})
+    event_log.emit("worker_registered", {"worker_id": worker_id})
     return {"worker_id": worker_id}
 
 
@@ -185,6 +244,36 @@ def worker_heartbeat(worker_id: str):
     if not w:
         return Response(status_code=404)
     w.last_seen = now()
+    return {"ok": True}
+
+
+@app.get("/workers")
+def list_workers(limit: int = 200):
+    items = list(WORKERS.values())
+    items.sort(key=lambda w: w.last_seen, reverse=True)
+    items = items[: max(1, min(limit, 2000))]
+    return [worker_public_view(w) for w in items]
+
+
+@app.post("/workers/{worker_id}/quarantine")
+def quarantine_worker(worker_id: str, seconds: int = 30):
+    w = WORKERS.get(worker_id)
+    if not w:
+        return Response(status_code=404)
+    w.quarantined_until = now() + max(1, min(seconds, 3600))
+    log.warning("worker quarantined (manual)", extra={"event": "worker_quarantined_manual", "worker_id": worker_id})
+    event_log.emit("worker_quarantined_manual", {"worker_id": worker_id})
+    return {"ok": True, "quarantined_until": w.quarantined_until}
+
+
+@app.post("/workers/{worker_id}/unquarantine")
+def unquarantine_worker(worker_id: str):
+    w = WORKERS.get(worker_id)
+    if not w:
+        return Response(status_code=404)
+    w.quarantined_until = 0.0
+    log.info("worker unquarantined (manual)", extra={"event": "worker_unquarantined_manual", "worker_id": worker_id})
+    event_log.emit("worker_unquarantined_manual", {"worker_id": worker_id})
     return {"ok": True}
 
 

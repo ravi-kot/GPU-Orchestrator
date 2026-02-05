@@ -1,0 +1,49 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+dist/
+build/
+*.egg-info/
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Local env/secrets ---
+.env
+.env.*
+!.env.example
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+.cursor/
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Docker ---
+*.pid
+
+# --- Grafana / Prometheus local volumes (if you later mount/persist them) ---
+**/grafana/data/
+**/grafana/plugins/
+**/prometheus/data/
+

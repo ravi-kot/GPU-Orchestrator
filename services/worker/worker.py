@@ -60,7 +60,22 @@ def do_job(job_type: str, payload: Dict[str, Any]) -> None:
 def main() -> None:
     configure_logging()
     log = logging.getLogger("worker")
-    worker_id = register()
+
+    # Manager may not be ready when the worker starts; retry register with backoff.
+    attempt = 0
+    worker_id = None
+    while worker_id is None:
+        try:
+            worker_id = register()
+        except Exception as e:
+            attempt += 1
+            delay = min(10.0, 0.5 * (2 ** min(attempt, 5)))
+            log.warning(
+                "register failed; retrying",
+                extra={"event": "worker_register_failed", "error": str(e)},
+            )
+            time.sleep(delay)
+
     log.info("registered", extra={"event": "worker_registered", "worker_id": worker_id})
     last_hb = 0.0
 

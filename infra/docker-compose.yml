@@ -14,6 +14,7 @@ services:
 
   worker:
     build: ../services/worker
+    restart: unless-stopped
     environment:
       - MANAGER_URL=http://job-manager:8000
       - WORKER_NAME=worker

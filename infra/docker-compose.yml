@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   job-manager:
     build: ../services/job_manager

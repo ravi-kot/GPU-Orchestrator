@@ -1,6 +1,6 @@
 # AI Infra Orchestrator (Mini Control Plane)
 
-A mini AI infrastructure control-plane that schedules compute jobs, exports SLO-grade telemetry, and auto-remediates failures (retries + quarantine), with Prometheus + Grafana dashboards.
+A mini AI infrastructure control plane that schedules compute jobs, exports SLO-grade telemetry, and auto-remediates failures (retry + quarantine). Runs locally with Docker Compose, Prometheus, and Grafana.
 
 ## Why this project
 This repo demonstrates real AI infrastructure skills:
@@ -34,3 +34,19 @@ Observability:
 make up
 make scale N=3
 make load
+```
+
+Open:
+- Job Manager: http://localhost:8000/healthz
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (admin/admin)
+
+## Demo (incident replay)
+```bash
+make incident
+```
+
+## What this proves
+- orchestration: queue, scheduling, concurrency control
+- observability: Prometheus metrics + Grafana dashboards + alert rules
+- reliability automation: retries/backoff + quarantine

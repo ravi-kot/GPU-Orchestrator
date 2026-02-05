@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any, Dict, Optional
 
@@ -8,6 +9,8 @@ from fastapi import FastAPI, Response
 from pydantic import BaseModel, Field
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
+from .event_log import get_event_logger
+from .logging_config import configure_logging
 from .models import JOBS, WORKERS, Job, Worker, now
 from .scheduler import (
     RUNNING_TTL_S,
@@ -25,6 +28,8 @@ from .scheduler import (
 # -----------------------
 app = FastAPI(title="AI Infra Orchestrator - Job Manager")
 JOB_Q: asyncio.Queue[str] = asyncio.Queue()
+log = logging.getLogger("job-manager")
+event_log = get_event_logger()
 
 # -----------------------
 # Prometheus metrics
@@ -111,6 +116,7 @@ async def orphan_reaper_loop() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    configure_logging()
     asyncio.create_task(metrics_loop())
     asyncio.create_task(orphan_reaper_loop())
 
@@ -141,6 +147,8 @@ async def submit_job(req: SubmitJobReq):
     )
     await JOB_Q.put(job_id)
     JOBS_SUBMITTED.inc()
+    log.info("job submitted", extra={"event": "job_submitted", "job_id": job_id, "state": "queued"})
+    event_log.emit("job_submitted", {"job_id": job_id, "state": "queued"})
     return {"job_id": job_id}
 
 
@@ -215,6 +223,14 @@ async def pull_work(worker_id: str):
         QUEUE_DELAY_S.observe(max(0.0, now() - j.created_at))
 
     assign_job_to_worker(j, w)
+    log.info(
+        "job assigned",
+        extra={"event": "job_assigned", "job_id": j.job_id, "worker_id": worker_id, "attempts": j.attempts, "state": j.state},
+    )
+    event_log.emit(
+        "job_assigned",
+        {"job_id": j.job_id, "worker_id": worker_id, "attempts": j.attempts, "state": j.state},
+    )
 
     return {
         "job_id": j.job_id,
@@ -241,6 +257,14 @@ async def report_work(req: WorkReportReq):
         j.finished_at = now()
         j.last_error = None
         JOBS_COMPLETED.labels(status="succeeded").inc()
+        log.info(
+            "job succeeded",
+            extra={"event": "job_completed", "job_id": j.job_id, "worker_id": req.worker_id, "status": "succeeded", "runtime_s": req.runtime_s, "attempts": j.attempts, "state": j.state},
+        )
+        event_log.emit(
+            "job_completed",
+            {"job_id": j.job_id, "worker_id": req.worker_id, "status": "succeeded", "runtime_s": req.runtime_s, "attempts": j.attempts, "state": j.state, "error": ""},
+        )
         return {"ok": True}
 
     # failed
@@ -250,6 +274,8 @@ async def report_work(req: WorkReportReq):
     # quarantine decision
     if record_failure_and_maybe_quarantine(w):
         REMEDIATIONS.labels(action="quarantine").inc()
+        log.warning("worker quarantined", extra={"event": "worker_quarantined", "worker_id": req.worker_id})
+        event_log.emit("worker_quarantined", {"worker_id": req.worker_id})
 
     if should_retry(j):
         delay = backoff_s(j.attempts)
@@ -258,10 +284,26 @@ async def report_work(req: WorkReportReq):
         REMEDIATIONS.labels(action="retry").inc()
         asyncio.create_task(retry_later(j.job_id, JOB_Q, delay))
         JOBS_COMPLETED.labels(status="failed").inc()
+        log.warning(
+            "job failed; retry scheduled",
+            extra={"event": "job_failed", "job_id": j.job_id, "worker_id": req.worker_id, "status": "failed", "runtime_s": req.runtime_s, "attempts": j.attempts, "state": j.state, "error": j.last_error},
+        )
+        event_log.emit(
+            "job_failed",
+            {"job_id": j.job_id, "worker_id": req.worker_id, "status": "failed", "runtime_s": req.runtime_s, "attempts": j.attempts, "state": j.state, "error": j.last_error},
+        )
         return {"ok": True, "retry_in_s": delay}
 
     # terminal failure
     j.state = "dead"
     j.finished_at = now()
     JOBS_COMPLETED.labels(status="dead").inc()
+    log.error(
+        "job dead",
+        extra={"event": "job_dead", "job_id": j.job_id, "worker_id": req.worker_id, "status": "dead", "runtime_s": req.runtime_s, "attempts": j.attempts, "state": j.state, "error": j.last_error},
+    )
+    event_log.emit(
+        "job_dead",
+        {"job_id": j.job_id, "worker_id": req.worker_id, "status": "dead", "runtime_s": req.runtime_s, "attempts": j.attempts, "state": j.state, "error": j.last_error},
+    )
     return {"ok": True, "dead": True}

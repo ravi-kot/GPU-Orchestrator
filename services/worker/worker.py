@@ -1,4 +1,5 @@
 import os
+import logging
 import random
 import time
 from typing import Any, Dict
@@ -6,6 +7,8 @@ from typing import Any, Dict
 import cv2 as cv  # IMPORTANT: keep this import style (matches guide)
 import numpy as np
 import requests
+
+from logging_config import configure_logging
 
 MANAGER_URL = os.environ.get("MANAGER_URL", "http://job-manager:8000")
 WORKER_NAME = os.environ.get("WORKER_NAME", "worker")
@@ -55,7 +58,10 @@ def do_job(job_type: str, payload: Dict[str, Any]) -> None:
 
 
 def main() -> None:
+    configure_logging()
+    log = logging.getLogger("worker")
     worker_id = register()
+    log.info("registered", extra={"event": "worker_registered", "worker_id": worker_id})
     last_hb = 0.0
 
     while True:
@@ -63,6 +69,7 @@ def main() -> None:
         if now - last_hb >= HEARTBEAT_S:
             try:
                 heartbeat(worker_id)
+                log.info("heartbeat", extra={"event": "worker_heartbeat", "worker_id": worker_id})
             except Exception:
                 # best-effort heartbeat
                 pass
@@ -76,6 +83,10 @@ def main() -> None:
                 continue
             r.raise_for_status()
             job = r.json()
+            log.info(
+                "picked job",
+                extra={"event": "job_picked", "worker_id": worker_id, "job_id": job.get("job_id"), "job_type": job.get("job_type")},
+            )
         except Exception:
             time.sleep(0.2)
             continue
@@ -91,6 +102,18 @@ def main() -> None:
             err = str(e)
 
         runtime_s = max(0.0, time.time() - t0)
+        log.info(
+            "job finished",
+            extra={
+                "event": "job_finished",
+                "worker_id": worker_id,
+                "job_id": job.get("job_id"),
+                "job_type": job.get("job_type"),
+                "status": status,
+                "runtime_s": runtime_s,
+                "error": err,
+            },
+        )
         try:
             requests.post(
                 f"{MANAGER_URL}/work/report",

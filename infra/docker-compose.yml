@@ -6,6 +6,13 @@ services:
     container_name: job-manager
     ports:
       - "8000:8000"
+    environment:
+      - LOG_FORMAT=${LOG_FORMAT:-plain}
+      - EVENT_LOG_ENABLED=${EVENT_LOG_ENABLED:-1}
+      - EVENT_LOG_FORMAT=${EVENT_LOG_FORMAT:-json}
+      - EVENT_LOG_PATH=${EVENT_LOG_PATH:-/logs/job_events.jsonl}
+    volumes:
+      - ./logs:/logs
 
   worker:
     build: ../services/worker
@@ -13,6 +20,7 @@ services:
       - MANAGER_URL=http://job-manager:8000
       - WORKER_NAME=worker
       - FAIL_RATE=0.05
+      - LOG_FORMAT=${LOG_FORMAT:-plain}
     depends_on:
       - job-manager
 

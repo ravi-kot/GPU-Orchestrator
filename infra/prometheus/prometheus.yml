@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: job_manager
+    static_configs:
+      - targets: ["job_manager:8000"]
+  - job_name: worker
+    static_configs:
+      - targets: ["worker:9000"]

@@ -1,0 +1,4 @@
+redis==5.0.1
+prometheus-client==0.20.0
+httpx==0.26.0
+

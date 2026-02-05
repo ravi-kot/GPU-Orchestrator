@@ -15,7 +15,7 @@ Observability:
 - Prometheus scrapes /metrics
 - Grafana dashboards (p95 runtime, queue delay, success rate, backlog)
 
-## Features (MVP)
+## Features
 - REST API: submit jobs, query status
 - Worker registration + heartbeat
 - Scheduling + concurrency control
@@ -42,7 +42,7 @@ Open:
 make incident
 ```
 
-## What this proves
+## Summary
 - orchestration: queue, scheduling, concurrency control
 - observability: Prometheus metrics + Grafana dashboards + alert rules
 - reliability automation: retries/backoff + quarantine

@@ -1,99 +1,112 @@
-import time
-import json
-import logging
+import os
 import random
-from redis import Redis
-import httpx
-from prometheus_client import Counter, Histogram, start_http_server
+import time
+from typing import Any, Dict
 
-from logging_config import configure_logging
+import cv2 as cv  # IMPORTANT: keep this import style (matches guide)
+import numpy as np
+import requests
 
-JOB_MANAGER = "http://localhost:8000"
-REDIS_URL = "redis://localhost:6379/0"
-POLL_INTERVAL = 2.0
-MAX_RETRIES = 5
-BASE_BACKOFF = 1.0
+MANAGER_URL = os.environ.get("MANAGER_URL", "http://job-manager:8000")
+WORKER_NAME = os.environ.get("WORKER_NAME", "worker")
+FAIL_RATE = float(os.environ.get("FAIL_RATE", "0.05"))
+HEARTBEAT_S = float(os.environ.get("HEARTBEAT_S", "5"))
 
-jobs_picked_total = Counter("worker_jobs_picked_total", "Jobs picked by worker")
-worker_failures_total = Counter("worker_failures_total", "Job failures at worker")
-worker_job_runtime_seconds = Histogram("worker_job_runtime_seconds", "Job runtime")
 
-def mark_running(r: Redis, job_id: str):
-    r.hset(f"job:{job_id}", mapping={
-        "state": "running",
-        "started_at": time.time(),
-    })
+def register() -> str:
+    r = requests.post(
+        f"{MANAGER_URL}/workers/register",
+        json={"name": WORKER_NAME, "capabilities": {"gpu": False}},
+        timeout=10,
+    )
+    r.raise_for_status()
+    return r.json()["worker_id"]
 
-def mark_done(r: Redis, job_id: str, result: dict):
-    r.hset(f"job:{job_id}", mapping={
-        "state": "succeeded",
-        "finished_at": time.time(),
-        "result": json.dumps(result),
-    })
 
-def mark_failed(r: Redis, job_id: str, error: str):
-    r.hset(f"job:{job_id}", mapping={
-        "state": "failed",
-        "finished_at": time.time(),
-        "error": error,
-    })
+def heartbeat(worker_id: str) -> None:
+    requests.post(f"{MANAGER_URL}/workers/{worker_id}/heartbeat", timeout=10).raise_for_status()
 
-def requeue_with_backoff(r: Redis, job_id: str, attempts: int):
-    delay = BASE_BACKOFF * (2 ** attempts)
-    r.zadd("jobs:delayed", {job_id: time.time() + delay})
 
-def execute(job: dict):
-    params = json.loads(job.get("params", "{}")) if isinstance(job.get("params"), str) else job.get("params", {})
-    duration = float(params.get("sleep", 0.5))
-    fail_rate = float(params.get("fail_rate", 0.1))
-    time.sleep(duration)
-    if random.random() < fail_rate:
-        raise RuntimeError("simulated failure")
-    return {"ok": True, "duration": duration}
+def do_job(job_type: str, payload: Dict[str, Any]) -> None:
+    # Failure injection for incident replay
+    if random.random() < FAIL_RATE:
+        raise RuntimeError("injected failure")
 
-def main():
-    configure_logging()
-    log = logging.getLogger("worker")
-    r = Redis.from_url(REDIS_URL, decode_responses=True)
-    start_http_server(9000)
+    if job_type == "sleep":
+        time.sleep(float(payload.get("t", 0.2)))
+        return
+
+    if job_type == "matmul":
+        n = int(payload.get("n", 512))
+        a = np.random.randn(n, n).astype(np.float32)
+        b = np.random.randn(n, n).astype(np.float32)
+        _ = a @ b
+        return
+
+    # default: cv_blur (AI-flavored synthetic workload)
+    h = int(payload.get("h", 720))
+    w = int(payload.get("w", 1280))
+    k = int(payload.get("k", 11))
+    # OpenCV requires odd kernel size
+    if k % 2 == 0:
+        k += 1
+    img = (np.random.rand(h, w, 3) * 255).astype(np.uint8)
+    _ = cv.GaussianBlur(img, (k, k), 0)
+
+
+def main() -> None:
+    worker_id = register()
+    last_hb = 0.0
 
     while True:
         now = time.time()
-        ready = r.zrangebyscore("jobs:delayed", 0, now, start=0, num=1)
-        if ready:
-            job_id = ready[0]
-            r.zrem("jobs:delayed", job_id)
-            r.rpush("jobs:queue", job_id)
+        if now - last_hb >= HEARTBEAT_S:
+            try:
+                heartbeat(worker_id)
+            except Exception:
+                # best-effort heartbeat
+                pass
+            last_hb = now
 
-        job = r.brpop("jobs:queue", timeout=5)
-        if not job:
-            log.info("No job, waiting...")
-            continue
-        _, job_id = job
-        jobs_picked_total.inc()
-        log.info("Picked job %s", job_id)
-
-        job_data = r.hgetall(f"job:{job_id}")
-        if not job_data:
-            log.warning("Job %s missing data", job_id)
-            continue
-
+        # Pull work
         try:
-            mark_running(r, job_id)
-            start = time.time()
-            result = execute(job_data)
-            worker_job_runtime_seconds.observe(time.time() - start)
-            mark_done(r, job_id, result)
-            log.info("Completed job %s", job_id)
-        except Exception as exc:  # broad on purpose
-            worker_failures_total.inc()
-            attempts = int(job_data.get("attempts", 0)) + 1
-            r.hset(f"job:{job_id}", mapping={"attempts": attempts})
-            log.exception("Job %s failed (attempt %s): %s", job_id, attempts, exc)
-            if attempts < MAX_RETRIES:
-                requeue_with_backoff(r, job_id, attempts)
-            else:
-                mark_failed(r, job_id, str(exc))
+            r = requests.get(f"{MANAGER_URL}/work/pull", params={"worker_id": worker_id}, timeout=15)
+            if r.status_code == 204:
+                time.sleep(0.1)
+                continue
+            r.raise_for_status()
+            job = r.json()
+        except Exception:
+            time.sleep(0.2)
+            continue
+
+        # Execute + report
+        t0 = time.time()
+        status = "succeeded"
+        err = None
+        try:
+            do_job(job["job_type"], job.get("payload", {}))
+        except Exception as e:
+            status = "failed"
+            err = str(e)
+
+        runtime_s = max(0.0, time.time() - t0)
+        try:
+            requests.post(
+                f"{MANAGER_URL}/work/report",
+                json={
+                    "job_id": job["job_id"],
+                    "worker_id": worker_id,
+                    "status": status,
+                    "runtime_s": runtime_s,
+                    "error": err,
+                },
+                timeout=15,
+            ).raise_for_status()
+        except Exception:
+            # If reporting fails, the job may become orphaned; the manager reaper will requeue it.
+            pass
+
 
 if __name__ == "__main__":
     main()

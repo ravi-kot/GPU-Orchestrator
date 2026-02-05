@@ -1,10 +1,12 @@
 global:
-  scrape_interval: 5s
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+rule_files:
+  - /etc/prometheus/alert.rules.yml
 
 scrape_configs:
-  - job_name: job_manager
+  - job_name: job-manager
+    metrics_path: /metrics
     static_configs:
-      - targets: ["job_manager:8000"]
-  - job_name: worker
-    static_configs:
-      - targets: ["worker:9000"]
+      - targets: ["job-manager:8000"]

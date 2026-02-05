@@ -1,0 +1,49 @@
+{
+  "title": "AI Infra Orchestrator",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "2s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Jobs/min",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "rate(jobs_submitted_total[1m]) * 60", "legendFormat": "submitted/min" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Success rate",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(jobs_completed_total{status=\\\"succeeded\\\"}[2m]) / clamp_min(rate(jobs_completed_total[2m]), 0.0001)",
+          "legendFormat": "success_rate"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 Job runtime (s)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(job_runtime_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95_runtime"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue depth",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "queue_depth", "legendFormat": "queue_depth" }
+      ]
+    }
+  ]
+}
+
+

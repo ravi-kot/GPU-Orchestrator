@@ -1,0 +1,29 @@
+groups:
+  - name: orchestrator_alerts
+    rules:
+      - alert: HighJobFailureRate
+        expr: |
+          (rate(jobs_completed_total{status="failed"}[2m]) / clamp_min(rate(jobs_completed_total[2m]), 0.0001)) > 0.02
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Job failure rate above 2%"
+
+      - alert: QueueBacklogHigh
+        expr: queue_depth > 20
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Queue backlog too high"
+
+      - alert: WorkersQuarantined
+        expr: workers_quarantined > 0
+        for: 1m
+        labels:
+          severity: warn
+        annotations:
+          summary: "One or more workers quarantined"
+
+

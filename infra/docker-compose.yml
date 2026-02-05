@@ -1,29 +1,42 @@
 version: "3.9"
 
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
-  job_manager:
-    build:
-      context: ..
-      dockerfile: services/job_manager/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379/0
+  job-manager:
+    build: ../services/job_manager
+    container_name: job-manager
     ports:
       - "8000:8000"
-    depends_on:
-      - redis
 
   worker:
-    build:
-      context: ..
-      dockerfile: services/worker/Dockerfile
+    build: ../services/worker
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - JOB_MANAGER=http://job_manager:8000
+      - MANAGER_URL=http://job-manager:8000
+      - WORKER_NAME=worker
+      - FAIL_RATE=0.05
     depends_on:
-      - redis
-      - job_manager
+      - job-manager
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - job-manager
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus

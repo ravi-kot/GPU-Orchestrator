@@ -2,12 +2,8 @@
 
 A mini AI infrastructure control plane that schedules compute jobs, exports SLO-grade telemetry, and auto-remediates failures (retry + quarantine). Runs locally with Docker Compose, Prometheus, and Grafana.
 
-## Why this project
-This repo demonstrates real AI infrastructure skills:
-- orchestration (queue, scheduling, concurrency, retries/backoff)
-- observability (metrics, dashboards, alerts)
-- reliability automation (failure detection + auto-remediation)
-- incident replay + runbook (SRE-style)
+## Prometheus Monitoring
+image.png
 
 ## Architecture
 Control plane:
